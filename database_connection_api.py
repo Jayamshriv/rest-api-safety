@@ -78,7 +78,7 @@ def get_users_by_emails():
 
 # get all users
 @app.route("/allusers", methods=["GET"])
-def get_all_users_data():
+def get_all_users():
     cursor.execute("SELECT * FROM UserData ")
     users = cursor.fetchall()
     return jsonify(users)
