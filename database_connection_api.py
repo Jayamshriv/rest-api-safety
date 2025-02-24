@@ -13,42 +13,56 @@ conn = mysql.connector.connect(
 )
 cursor = conn.cursor(dictionary=True)
 
+# Create User
 @app.route("/user", methods=["POST"])
 def create_user():
     data = request.json
+    try:
+        # Insert into Users table
+        sql_users = """
+            INSERT INTO Users (PersonID, FullName, Email, Password, PhoneNumber) 
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(sql_users, (data["PersonID"], data["FullName"], data["Email"], data["Password"], data["PhoneNumber"]))
 
-    # Check if the email already exists
-    email_check_sql = "SELECT * FROM UserData WHERE Email = %s"
-    cursor.execute(email_check_sql, (data["Email"],))
-    existing_user = cursor.fetchone()
+        # Insert into User_Organizations table
+        sql_organizations = """
+            INSERT INTO User_Organizations (UserID, OrganizationID) 
+            VALUES (%s, %s)
+        """
+        cursor.execute(sql_organizations, (data["PersonID"], data["OrganizationID"]))
 
-    if existing_user:
-        return jsonify({"message": "Email already exists"}), 400
+        # Insert into TrustedContacts table
+        sql_trusted_contacts = """
+            INSERT INTO TrustedContacts (UserID, TrustedContactID, TrustedContactName, TrustedContactNumber) 
+            VALUES (%s, %s, %s, %s)
+        """
+        cursor.execute(sql_trusted_contacts, (data["PersonID"], data["TrustedContactID"], data["TrustedContactName"], data["TrustedContactNumber"]))
 
-    # Check if the organization exists and get its OrganizationID
-    org_check_sql = "SELECT OrganizationID FROM UserData WHERE Organization = %s LIMIT 1"
-    cursor.execute(org_check_sql, (data["Organization"],))
-    existing_org = cursor.fetchone()
+        conn.commit()
+        return jsonify({"message": "User created successfully"}), 201
 
-    if existing_org:
-        organization_id = existing_org[0]  # Use existing OrganizationID
-    else:
-        organization_id = data["OrganizationID"]  # Assign new OrganizationID
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
 
-    # Insert the new user
-    sql = """
-        INSERT INTO UserData (Organization, OrganizationID, FullName, PersonID, Email, Password, PhoneNumber, TrustedContactName, TrustedContactID, TrustedContactNumber)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    cursor.execute(sql, (
-        data["Organization"], organization_id, data["FullName"], data["PersonID"],
-        data["Email"], data["Password"], data["PhoneNumber"], data["TrustedContactName"],
-        data["TrustedContactID"], data["TrustedContactNumber"]
-    ))
-    conn.commit()
-    
-    return jsonify({"message": "User created successfully"}), 201
+# Update Trusted Contact
+@app.route("/updateTrustedContactNumber/<email>", methods=["PUT"])
+def update_trusted_contact_number(email):
+    data = request.json
+    try:
+        sql = """
+            UPDATE TrustedContacts 
+            SET TrustedContactName = %s, TrustedContactNumber = %s 
+            WHERE UserID = (SELECT PersonID FROM Users WHERE Email = %s)
+        """
+        cursor.execute(sql, (data["TrustedContactName"], data["TrustedContactNumber"], email))
+        conn.commit()
+        return jsonify({"message": "Trusted Contact updated successfully"})
 
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
 
 # Read User
 @app.route("/user/<int:person_id>", methods=["GET"])
@@ -61,17 +75,34 @@ def get_user(person_id):
 @app.route("/user/<int:person_id>", methods=["PUT"])
 def update_user(person_id):
     data = request.json
-    sql = "UPDATE UserData SET FullName = %s, Email = %s, PhoneNumber = %s WHERE PersonID = %s"
-    cursor.execute(sql, (data["FullName"], data["Email"], data["PhoneNumber"], person_id))
-    conn.commit()
-    return jsonify({"message": "User updated successfully"})
+    try:
+        sql = """
+            UPDATE Users 
+            SET FullName = %s, Email = %s, PhoneNumber = %s 
+            WHERE PersonID = %s
+        """
+        cursor.execute(sql, (data["FullName"], data["Email"], data["PhoneNumber"], person_id))
+        conn.commit()
+        return jsonify({"message": "User updated successfully"})
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
 
 # Delete User
 @app.route("/user/<int:person_id>", methods=["DELETE"])
 def delete_user(person_id):
-    cursor.execute("DELETE FROM UserData WHERE PersonID = %s", (person_id,))
-    conn.commit()
-    return jsonify({"message": "User deleted successfully"})
+    try:
+        cursor.execute("DELETE FROM TrustedContacts WHERE UserID = %s", (person_id,))
+        cursor.execute("DELETE FROM User_Organizations WHERE UserID = %s", (person_id,))
+        cursor.execute("DELETE FROM Users WHERE PersonID = %s", (person_id,))
+
+        conn.commit()
+        return jsonify({"message": "User deleted successfully"})
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
 
 # Get all emails for an organization
 @app.route("/organization/<org_name>/emails", methods=["GET"])
@@ -92,6 +123,9 @@ def get_users_by_org(org_name):
 def get_users_by_emails():
     data = request.json
     emails = tuple(data["emails"])
+    if not emails:
+        return jsonify({"error": "No emails provided"}), 400
+
     sql = f"SELECT * FROM UserData WHERE Email IN ({','.join(['%s'] * len(emails))})"
     cursor.execute(sql, emails)
     users = cursor.fetchall()
@@ -103,7 +137,7 @@ def verify_user():
     email = data["email"]
     password = data["password"]
 
-    cursor.execute("SELECT * FROM UserData WHERE Email = %s", (email,))
+    cursor.execute("SELECT * FROM Users WHERE Email = %s", (email,))
     user = cursor.fetchone()
 
     if user:
@@ -114,13 +148,12 @@ def verify_user():
     else:
         return jsonify({"status": "user_not_found"}), 404
 
-# get all users
+# Get all users
 @app.route("/allusers", methods=["GET"])
 def get_all_users():
     cursor.execute("SELECT * FROM UserData ")
     users = cursor.fetchall()
     return jsonify(users)
-
 
 if __name__ == "__main__":
     app.run(debug=True)
